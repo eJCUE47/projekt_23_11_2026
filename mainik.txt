@@ -1,0 +1,208 @@
+#include <Servo.h>
+#include <IRremote.hpp>
+
+Servo serwo1, serwo2;
+
+// Piny
+#define IR_PIN 2
+#define PIR_PIN 3
+#define SERVO1_PIN 9
+#define SERVO2_PIN 10
+
+#define POWER 0x00
+#define LED 12
+
+// Stany bramy w #define
+#define STAN_ZAMKNIETA 0
+#define STAN_OTWARTA   1
+#define STAN_OTWIERANIE 4
+#define STAN_ZAMYKANIE 5
+#define STAN_STOP      6
+
+int pozycja1 = 0, pozycja2 = 180;
+int cel1 = 0, cel2 = 180;
+int stan = STAN_ZAMKNIETA;
+int kierunek = STAN_ZAMKNIETA;
+
+bool ruch = false;
+bool blokadaStopPoZawroceniu = false;
+
+unsigned long czas = 0, przycisk = 0;
+
+// STAN_ZAMKNIETA
+void zamknieta() {
+  cel1 = 0;
+  cel2 = 180;
+  stan = STAN_ZAMKNIETA;
+  ruch = false;
+  blokadaStopPoZawroceniu = false;
+}
+
+// STAN_OTWARTA
+void otwarta() {
+  cel1 = 90;
+  cel2 = 90;
+  stan = STAN_OTWARTA;
+  ruch = false;
+  blokadaStopPoZawroceniu = false;
+}
+
+// STAN_OTWIERANIE
+void otwieranie() {
+  cel1 = 90;
+  cel2 = 90;
+  stan = STAN_OTWIERANIE;
+  kierunek = STAN_OTWIERANIE;
+  ruch = true;
+}
+
+// STAN_ZAMYKANIE
+void zamykanie() {
+  cel1 = 0;
+  cel2 = 180;
+  stan = STAN_ZAMYKANIE;
+  kierunek = STAN_ZAMYKANIE;
+  ruch = true;
+  blokadaStopPoZawroceniu = false;
+}
+
+// STAN_STOP (zatrzymanie / uchylenie)
+void zatrzymanie() {
+  kierunek = (stan == STAN_OTWIERANIE) ? STAN_ZAMYKANIE : STAN_OTWIERANIE;
+
+  cel1 = pozycja1;
+  cel2 = pozycja2;
+
+  ruch = false;
+  stan = STAN_STOP;
+}
+
+// ZAWROCENIE DO OTWIERANIA PRZY ZAMYKANIU
+void zawrocDoOtwierania() {
+  cel1 = 90;
+  cel2 = 90;
+  stan = STAN_OTWIERANIE;
+  kierunek = STAN_OTWIERANIE;
+  ruch = true;
+  blokadaStopPoZawroceniu = true;
+}
+
+// OBSLUGA POWER
+void obslugaPower() {
+  if (ruch) {
+    zatrzymanie();
+    return;
+  }
+
+  switch (stan) {
+    case STAN_ZAMKNIETA:
+      otwieranie();
+      break;
+
+    case STAN_OTWARTA:
+      zamykanie();
+      break;
+
+    case STAN_STOP:
+      if (kierunek == STAN_OTWIERANIE) otwieranie();
+      else zamykanie();
+      break;
+
+    default:
+      break;
+  }
+}
+
+// OBSLUGA PIR
+void obslugaPIR() {
+  int stanPIR = digitalRead(PIR_PIN);
+
+  if (stanPIR == LOW) {
+    blokadaStopPoZawroceniu = false;
+    return;
+  }
+
+  if (!ruch) return;
+
+  switch (stan) {
+    case STAN_ZAMYKANIE:
+      zawrocDoOtwierania();
+      break;
+
+    case STAN_OTWIERANIE:
+      if (!blokadaStopPoZawroceniu) {
+        zatrzymanie();
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+// STEROWANIE SERWAMI
+void sterowanieSerwami() {
+  if (!ruch || millis() - czas < 15) return;
+
+  czas = millis();
+
+  if (pozycja1 < cel1) pozycja1++;
+  else if (pozycja1 > cel1) pozycja1--;
+
+  if (pozycja2 < cel2) pozycja2++;
+  else if (pozycja2 > cel2) pozycja2--;
+
+  serwo1.write(pozycja1);
+  serwo2.write(pozycja2);
+
+  if (pozycja1 == cel1 && pozycja2 == cel2) {
+    switch (stan) {
+      case STAN_OTWIERANIE:
+        otwarta();
+        break;
+
+      case STAN_ZAMYKANIE:
+        zamknieta();
+        break;
+
+      default:
+        break;
+    }
+  }
+}
+
+// ODCZYT PILOTA
+void obslugaPilota() {
+  if (!IrReceiver.decode()) return;
+
+  if (IrReceiver.decodedIRData.command == POWER &&
+      !(IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT) &&
+      millis() - przycisk > 300) {
+
+    przycisk = millis();
+    obslugaPower();
+  }
+
+  IrReceiver.resume();
+}
+
+void setup() {
+  serwo1.attach(SERVO1_PIN);
+  serwo2.attach(SERVO2_PIN);
+
+  pinMode(LED, OUTPUT);
+  pinMode(PIR_PIN, INPUT);
+
+  serwo1.write(pozycja1);
+  serwo2.write(pozycja2);
+
+  IrReceiver.begin(IR_PIN, ENABLE_LED_FEEDBACK);
+}
+
+void loop() {
+  obslugaPIR();
+  obslugaPilota();
+  sterowanieSerwami();
+
+  digitalWrite(LED, ruch);
+}
